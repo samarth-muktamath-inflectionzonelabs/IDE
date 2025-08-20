@@ -1,0 +1,71 @@
+###############################################################################
+# 1. General
+###############################################################################
+# OS trash
+.DS_Store
+Thumbs.db
+
+# Editor / tooling
+.vscode/
+.idea/
+*.sw?
+
+# Backup / temp
+*.bak
+*.backup
+*.tmp
+*.temp
+
+###############################################################################
+# 2. Node / JavaScript
+###############################################################################
+# Dependency trees
+node_modules/
+server/node_modules/
+interface/node_modules/
+
+# Package managers (keep only one lockfile)
+# yarn.lock
+# pnpm-lock.yaml
+# package-lock.json will be tracked
+
+# Build output
+dist/
+build/
+out/
+coverage/
+.cache/
+
+###############################################################################
+# 3. SvelteKit front-end
+###############################################################################
+interface/.svelte-kit/           # generated Vite build cache
+interface/.svelte-kit/**         # covers sub-dirs that sometimes sneak in
+
+###############################################################################
+# 4. Environment & logs
+###############################################################################
+.env
+.env.*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+###############################################################################
+# 5. Docker artifacts (if you keep workspace data locally)
+###############################################################################
+user/
+user-data/
+*.tar          # saved images
+docker-compose.override.yml
+
+###############################################################################
+# 6. TypeScript
+###############################################################################
+*.d.ts.map     # generated declaration maps
+*.tsbuildinfo  # incremental TS cache
+
+###############################################################################
+# END

@@ -1,0 +1,31 @@
+# User environment container
+FROM node:18-alpine
+
+# Install essential development tools
+RUN apk add --no-cache \
+    bash \
+    git \
+    nano \
+    vim \
+    curl \
+    python3 \
+    py3-pip \
+    gcc \
+    g++ \
+    make
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S codeuser && \
+    adduser -S -D -h /workspace -s /bin/bash -G codeuser -u 1001 codeuser
+
+# Set working directory
+WORKDIR /workspace
+
+# Install global npm packages that users might need
+RUN npm install -g typescript ts-node nodemon
+
+# Switch to non-root user
+USER codeuser
+
+# Default command
+CMD ["/bin/bash"]
