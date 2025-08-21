@@ -288,6 +288,12 @@ app.get('/files/content', async (req, res) => {
     decodedPath = decodedPath.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
     decodedPath = decodedPath.replace(/^\/+/, '');
     
+    // **ADDED: Fix truncated extension for file loading**
+    if (decodedPath.endsWith('.j') && !decodedPath.endsWith('.js') && !decodedPath.endsWith('.json')) {
+      console.log(`🔧 [DEBUG] Fixing incomplete extension for reading: ${decodedPath} -> ${decodedPath}s`);
+      decodedPath = decodedPath + 's';
+    }
+    
     if (!decodedPath || decodedPath.length === 0) {
       console.error('❌ [ERROR] Invalid file path');
       return res.status(400).json({ error: 'Invalid file path' });

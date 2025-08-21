@@ -143,19 +143,15 @@ export class DockerManager {
       return;
     }
 
-    // ULTRA-AGGRESSIVE CONTENT SANITIZATION
+    // STRONGEST FIX: Remove all control chars (including BOM and ALL Unicode controls) except \n and \t
     let sanitizedContent = content;
     
     // Log original content bytes
     const originalBytes = Buffer.from(content, 'utf8');
     console.log(`🔍 [DEBUG] Original content bytes (first 20):`, Array.from(originalBytes.slice(0, 20)).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(' '));
     
-    // Remove ALL control characters including SOH (0x01), STX (0x02), etc.
-    // Keep only: \n (0x0A), \t (0x09), and printable characters (0x20-0x7E, 0x80-0xFF)
-    sanitizedContent = sanitizedContent.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, '');
-    
-    // Additional cleanup for Unicode control characters
-    sanitizedContent = sanitizedContent.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
+    // Remove all ASCII and Unicode control characters and BOM, except \n (\x0A) and \t (\x09)
+    sanitizedContent = sanitizedContent.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\uFEFF]/g, '');
     
     // Normalize line endings to Unix format
     sanitizedContent = sanitizedContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
