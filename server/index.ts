@@ -40,6 +40,95 @@ function generateCleanUserId(): string {
 const socketUserMap = new Map<string, string>();
 const userSocketMap = new Map<string, string>();
 
+// Enhanced content cleaning with type safety
+function ultraCleanContent(content: string, filePath: string = ''): string {
+  console.log(`🧽 [DEBUG] Ultra-cleaning content for: ${filePath}`);
+  console.log(`🧽 [DEBUG] Original length: ${content.length}`);
+  
+  if (!content) return '';
+  
+  let cleaned = content;
+  
+  // Keep ONLY safe ASCII characters + \n + \t
+  cleaned = cleaned.replace(/[^\x20-\x7E\x09\x0A\x0D]/g, '');
+  
+  // Remove control characters but keep newlines and tabs
+  cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\xFF]/g, '');
+  
+  // Normalize line endings
+  cleaned = cleaned.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  
+  // Special handling for JSON files
+  if (filePath.includes('.json') || filePath.includes('package')) {
+    try {
+      console.log(`🧽 [DEBUG] JSON file detected, validating...`);
+      const parsed = JSON.parse(cleaned);
+      cleaned = JSON.stringify(parsed, null, 2);
+      console.log(`🧽 [DEBUG] JSON validated and reformatted`);
+    } catch (jsonError) {
+      console.log(`🧽 [DEBUG] JSON invalid, creating safe default`);
+      if (filePath.includes('package.json')) {
+        cleaned = JSON.stringify({
+          "name": "test",
+          "version": "1.0.0",
+          "main": "index.js",
+          "type": "module",
+          "scripts": {
+            "test": "echo \"Error: no test specified\" && exit 1"
+          },
+          "keywords": [],
+          "author": "",
+          "license": "ISC",
+          "description": ""
+        }, null, 2);
+      } else {
+        cleaned = '{}';
+      }
+    }
+  }
+  
+  console.log(`🧽 [DEBUG] Cleaning complete: ${content.length} -> ${cleaned.length}`);
+  return cleaned;
+}
+
+function fixIncompleteExtension(filePath: string): string {
+  console.log(`🔧 [DEBUG] Checking extension for: "${filePath}"`);
+  
+  const extensionMap: { [key: string]: string } = {
+    '.j': '.js',
+    '.t': '.ts', 
+    '.p': '.py',
+    '.c': '.cpp',
+    '.h': '.hpp',
+    '.ja': '.java',
+    '.ph': '.php',
+    '.r': '.rb',
+    '.g': '.go',
+    '.ru': '.rust',
+    '.sw': '.swift',
+    '.k': '.kt',
+    '.s': '.sh',
+    '.ht': '.html',
+    '.cs': '.css',
+    '.jso': '.json',
+    '.x': '.xml',
+    '.m': '.md',
+    '.y': '.yml',
+    '.do': '.dockerfile'
+  };
+
+  for (const [incomplete, complete] of Object.entries(extensionMap)) {
+    if (filePath.endsWith(incomplete) && !filePath.endsWith(complete)) {
+      const fixedPath = filePath.replace(incomplete, complete);
+      console.log(`🔧 [DEBUG] EXTENSION FIXED: "${filePath}" -> "${fixedPath}"`);
+      return fixedPath;
+    }
+  }
+
+  console.log(`🔧 [DEBUG] NO EXTENSION FIX NEEDED: "${filePath}"`);
+  return filePath;
+}
+
 io.on('connection', (socket) => {
   const userId: string = generateCleanUserId();
   socketUserMap.set(socket.id, userId);
@@ -71,69 +160,46 @@ io.on('connection', (socket) => {
   socket.emit('file:refresh');
 
   socket.on('file:change', async ({ path, content }: { path: string; content: string }) => {
-    console.log(`📁 [DEBUG] file:change START - User: ${userId}, Path: ${path}, Content length: ${content ? content.length : 0}`);
-    
-    // Fix incomplete file extensions
-    let fixedPath = path;
-    if (path.endsWith('.j') && !path.endsWith('.js') && !path.endsWith('.json')) {
-      console.log(`🔧 [DEBUG] Fixing incomplete extension: ${path} -> ${path}s`);
-      fixedPath = path + 's'; // Convert .j to .js
-    }
+    console.log(`\n📁 [DEBUG] =================== FILE CHANGE START ===================`);
+    console.log(`📁 [DEBUG] User: ${userId}`);
+    console.log(`📁 [DEBUG] Original Path: "${path}"`);
+    console.log(`📁 [DEBUG] Content Length: ${content ? content.length : 0}`);
     
     try {
-      // Save the file
-      await containerService.handleFileChange(userId, fixedPath, content);
-      console.log(`✅ [DEBUG] file:change - File saved successfully`);
+      const finalPath = fixIncompleteExtension(path);
+      console.log(`📁 [DEBUG] Final Path: "${finalPath}"`);
       
-      // Clean up any duplicate or incomplete files
-      await containerService.dockerManager.cleanupDuplicateFiles(userId);
-      console.log(`🧹 [DEBUG] file:change - Cleaned up duplicates`);
-      
-      // FORCE IMMEDIATE FILE SYSTEM SYNC
-      try {
-        const container = containerService.dockerManager.getContainer(userId);
-        if (container) {
-          // First sync
-          const syncExec = await container.exec({
-            Cmd: ['sync'],
-            AttachStdout: false,
-            AttachStderr: false,
-            Tty: false
-          });
-          await syncExec.start({ hijack: false });
-          
-          // Wait and sync again
-          await new Promise(resolve => setTimeout(resolve, 50));
-          
-          const syncExec2 = await container.exec({
-            Cmd: ['sync'],
-            AttachStdout: false,
-            AttachStderr: false,
-            Tty: false
-          });
-          await syncExec2.start({ hijack: false });
-          
-          console.log(`🔄 [DEBUG] file:change - Double sync completed`);
-        }
-      } catch (syncError) {
-        console.warn('Sync failed:', syncError);
+      if (typeof content !== 'string') {
+        throw new Error(`Invalid content type: ${typeof content}`);
       }
       
-      // Wait then emit refresh
+      const cleanContent = ultraCleanContent(content, finalPath);
+      console.log(`📁 [DEBUG] Content cleaned successfully`);
+      
+      await containerService.handleFileChange(userId, finalPath, cleanContent);
+      console.log(`📁 [DEBUG] File saved successfully`);
+      
+      await containerService.dockerManager.cleanupDuplicateFiles(userId);
+      console.log(`📁 [DEBUG] Duplicates cleaned up`);
+      
       setTimeout(() => {
         socket.emit('file:refresh');
-        console.log(`🔄 [DEBUG] file:change - Refresh emitted`);
+        console.log(`📁 [DEBUG] UI refresh emitted`);
       }, 100);
       
+      console.log(`📁 [DEBUG] =================== FILE CHANGE SUCCESS ===================\n`);
+      
     } catch (error) {
-      console.error(`❌ [ERROR] file:change failed:`, error);
+      console.error(`\n❌ [ERROR] =================== FILE CHANGE FAILED ===================`);
+      console.error(`❌ [ERROR] User: ${userId}, Path: ${path}`);
+      console.error(`❌ [ERROR] Error:`, error);
+      console.error(`❌ [ERROR] =================== FILE CHANGE FAILED ===================\n`);
+      
       socket.emit('file:error', { 
-        path: fixedPath, 
-        error: (error as Error).message 
+        path: path, 
+        error: error instanceof Error ? error.message : 'Unknown error'
       });
     }
-    
-    console.log(`🎯 [DEBUG] file:change COMPLETE - User: ${userId}`);
   });
 
   socket.on('terminal:data', async (data: string) => {
@@ -154,24 +220,17 @@ io.on('connection', (socket) => {
     await containerService.sendTerminalData(userId, text);
   });
 
-  // MANUAL SAVE HANDLER
   socket.on('file:save', async ({ path, content }: { path: string; content: string }) => {
-    console.log(`💾 [DEBUG] Manual save requested - User: ${userId}, Path: ${path}`);
-    
-    // Fix file extension if needed
-    let fixedPath = path;
-    if (path.endsWith('.j') && !path.endsWith('.js') && !path.endsWith('.json')) {
-      fixedPath = path + 's';
-    }
+    console.log(`\n💾 [DEBUG] =================== MANUAL SAVE START ===================`);
+    console.log(`💾 [DEBUG] User: ${userId}, Path: ${path}`);
     
     try {
-      await containerService.handleFileChange(userId, fixedPath, content);
-      console.log(`✅ [DEBUG] Manual save completed`);
+      const fixedPath = fixIncompleteExtension(path);
+      const cleanContent = ultraCleanContent(content, fixedPath);
       
-      // Clean duplicates
+      await containerService.handleFileChange(userId, fixedPath, cleanContent);
       await containerService.dockerManager.cleanupDuplicateFiles(userId);
       
-      // Force sync
       const container = containerService.dockerManager.getContainer(userId);
       if (container) {
         const syncExec = await container.exec({
@@ -186,9 +245,18 @@ io.on('connection', (socket) => {
       socket.emit('file:saved', { path: fixedPath, success: true });
       socket.emit('file:refresh');
       
+      console.log(`💾 [DEBUG] =================== MANUAL SAVE SUCCESS ===================\n`);
+      
     } catch (error) {
-      console.error(`❌ [ERROR] Manual save failed:`, error);
-      socket.emit('file:saved', { path: fixedPath, success: false, error: (error as Error).message });
+      console.error(`\n❌ [ERROR] =================== MANUAL SAVE FAILED ===================`);
+      console.error(`❌ [ERROR] Error:`, error);
+      console.error(`❌ [ERROR] =================== MANUAL SAVE FAILED ===================\n`);
+      
+      socket.emit('file:saved', { 
+        path: path, 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
     }
   });
 
@@ -201,26 +269,50 @@ io.on('connection', (socket) => {
   });
 });
 
+// Updated tree function with type safety
 function toTree(items: string[]): Record<string, any> {
   const tree: Record<string, any> = {};
   const uniqueItems: string[] = Array.from(new Set(items));
   
-  console.log(`🌳 [DEBUG] toTree input items:`, uniqueItems);
+  console.log(`🌳 [DEBUG] Building tree from items:`, uniqueItems);
 
   for (const item of uniqueItems) {
     if (!item) continue;
     
-    const [name, type] = item.split('|');
-    if (!name || !type) continue;
+    const parts = item.split('|');
+    const name = parts[0];
+    const type = parts[1];
+    
+    // Type guard - ensure both parts exist
+    if (!name || !type) {
+      console.warn(`🌳 [DEBUG] Invalid item format: ${item}`);
+      continue;
+    }
 
-    // REMOVED AGGRESSIVE FILTERING - Let all valid files through
-    console.log(`➕ [DEBUG] Adding to tree: ${name} (${type})`);
+    console.log(`🌳 [DEBUG] Adding to tree: ${name} (${type})`);
     tree[name] = type === 'd' ? {} : null;
   }
   
-  console.log(`🌳 [DEBUG] Final tree structure:`, tree);
+  console.log(`🌳 [DEBUG] Final tree:`, tree);
   return tree;
 }
+
+// Add health check route
+app.get('/health', async (req, res) => {
+  try {
+    const health = await containerService.getHealthStatus();
+    res.json({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      services: health
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
 
 app.get('/files', async (req, res) => {
   const socketId: string = req.query.userId as string;
@@ -233,15 +325,11 @@ app.get('/files', async (req, res) => {
   if (!userId) return res.status(400).json({ error: 'User session not found' });
   
   try {
-    // Clean up duplicates before listing
     await containerService.dockerManager.cleanupDuplicateFiles(userId);
     
     const items: string[] = await containerService.getFiles(userId);
     const tree: Record<string, any> = toTree(items);
-    console.log('File tree items:', items);
-    console.log('Converted tree:', tree);
     
-    // ADD CACHE HEADERS TO PREVENT CACHING
     res.set({
       'Cache-Control': 'no-cache, no-store, must-revalidate',
       'Pragma': 'no-cache',
@@ -251,237 +339,200 @@ app.get('/files', async (req, res) => {
     res.json({ tree });
   } catch (error: unknown) {
     console.error('Error in /files:', error);
-    res.status(500).json({ error: (error as Error).message });
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
 
 app.get('/files/content', async (req, res) => {
-  console.log('=== GET /files/content ===');
-  console.log('Query params:', req.query);
+  console.log('\n📖 [DEBUG] =================== GET FILE CONTENT ===================');
   
   try {
     const socketId: string = req.query.userId as string;
     const rawPath: string = req.query.path as string;
     
-    console.log(`📖 [DEBUG] File content request - socketId: ${socketId}, rawPath: ${rawPath}`);
+    console.log(`📖 [DEBUG] Socket ID: ${socketId}`);
+    console.log(`📖 [DEBUG] Raw Path: ${rawPath}`);
     
     if (!socketId || !rawPath) {
-      console.error('❌ [ERROR] Missing parameters');
-      return res.status(400).json({ error: 'Missing required parameters' });
+      return res.status(400).json({ error: 'Missing parameters' });
     }
     
     const userId: string | undefined = socketUserMap.get(socketId);
     if (!userId) {
-      console.error('❌ [ERROR] User session not found');
       return res.status(400).json({ error: 'User session not found' });
     }
     
-    let decodedPath: string = '';
-    try {
-      decodedPath = decodeURIComponent(rawPath);
-    } catch (decodeError) {
-      console.error('❌ [ERROR] URI decode failed:', decodeError);
-      return res.status(400).json({ error: 'Invalid URI encoding' });
-    }
-    
-    // Clean path but preserve file structure
-    decodedPath = decodedPath.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+    let decodedPath: string = decodeURIComponent(rawPath);
     decodedPath = decodedPath.replace(/^\/+/, '');
     
-    // **ADDED: Fix truncated extension for file loading**
-    if (decodedPath.endsWith('.j') && !decodedPath.endsWith('.js') && !decodedPath.endsWith('.json')) {
-      console.log(`🔧 [DEBUG] Fixing incomplete extension for reading: ${decodedPath} -> ${decodedPath}s`);
-      decodedPath = decodedPath + 's';
-    }
+    const finalPath = fixIncompleteExtension(decodedPath);
+    console.log(`📖 [DEBUG] Final path: ${finalPath}`);
     
-    if (!decodedPath || decodedPath.length === 0) {
-      console.error('❌ [ERROR] Invalid file path');
+    if (!finalPath) {
       return res.status(400).json({ error: 'Invalid file path' });
     }
     
-    console.log(`📖 [DEBUG] Reading file content for: ${decodedPath}`);
+    const content: string = await containerService.readFileFromContainer(userId, finalPath);
+    const cleanContent = ultraCleanContent(content, finalPath);
     
-    try {
-      const content: string = await containerService.readFileFromContainer(userId, decodedPath);
-      
-      console.log(`📖 [DEBUG] File content read successfully, length: ${content.length}`);
-      
-      // Set proper headers
-      res.set({
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0',
-        'Content-Type': 'application/json'
-      });
-      
-      res.json({ content });
-      
-    } catch (fileError) {
-      console.error(`❌ [ERROR] File read failed for ${decodedPath}:`, fileError);
-      res.status(404).json({ error: `File not found: ${decodedPath}` });
-    }
+    res.set({
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Content-Type': 'application/json'
+    });
+    
+    console.log(`📖 [DEBUG] Content returned successfully - Length: ${cleanContent.length}`);
+    console.log(`📖 [DEBUG] =================== GET FILE CONTENT SUCCESS ===================\n`);
+    
+    res.json({ content: cleanContent });
     
   } catch (error: unknown) {
-    console.error('=== ERROR IN FILE CONTENT ===');
-    console.error('Error:', error);
-    res.status(500).json({ error: (error as Error).message });
+    console.error(`\n❌ [ERROR] =================== GET FILE CONTENT FAILED ===================`);
+    console.error('❌ [ERROR] File content error:', error);
+    console.error(`❌ [ERROR] =================== GET FILE CONTENT FAILED ===================\n`);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
 
+// CRITICAL FIX: Updated /files/create endpoint
 app.post('/files/create', async (req, res) => {
-  console.log('========================================');
-  console.log('=== POST /files/create ===');
-  console.log('Request body:', JSON.stringify(req.body, null, 2));
-  console.log('========================================');
+  console.log('\n📁 [DEBUG] =================== CREATE FILE/DIRECTORY START ===================');
   
   try {
     const socketId: string = req.body.userId;
     let requestPath: string = req.body.path;
     const requestType: string = req.body.type;
-    const requestContent: string = req.body.content;
+    const requestContent: string = req.body.content || '';
     const parentPath: string = req.body.parentPath || '';
     
-    // Fix file extension if incomplete
-    if (requestType === 'file' && requestPath.endsWith('.j') && !requestPath.endsWith('.js') && !requestPath.endsWith('.json')) {
-      requestPath = requestPath + 's';
-      console.log(`🔧 [DEBUG] Fixed file extension: ${req.body.path} -> ${requestPath}`);
+    console.log(`📁 [DEBUG] Socket ID: ${socketId}`);
+    console.log(`📁 [DEBUG] Request Path: "${requestPath}"`);
+    console.log(`📁 [DEBUG] Request Type: "${requestType}"`);
+    console.log(`📁 [DEBUG] Parent Path: "${parentPath}"`);
+    console.log(`📁 [DEBUG] Content Length: ${requestContent.length}`);
+    
+    if (requestType === 'file') {
+      requestPath = fixIncompleteExtension(requestPath);
     }
     
-    console.log('🔍 PARSED VALUES:');
-    console.log('  - socketId:', socketId);
-    console.log('  - requestPath (fixed):', `"${requestPath}"`);
-    console.log('  - requestType:', requestType);
-    console.log('  - parentPath:', `"${parentPath}"`);
-    console.log('  - requestContent:', requestContent ? 'has content' : 'empty');
-    
     const userId: string | undefined = socketUserMap.get(socketId);
-    console.log('  - mapped userId:', userId);
-    
     if (!userId) {
-      console.error('❌ User session not found for socketId:', socketId);
+      console.error(`❌ [ERROR] User session not found for socket: ${socketId}`);
       return res.status(400).json({ error: 'User session not found' });
     }
     
     let fullPath: string = requestPath;
-    if (parentPath && parentPath.trim() !== '') {
-      const cleanParentPath = parentPath.replace(/^\/+|\/+$/g, '');
-      const cleanRequestPath = requestPath.replace(/^\/+|\/+$/g, '');
-      fullPath = cleanParentPath ? `${cleanParentPath}/${cleanRequestPath}` : cleanRequestPath;
-      
-      console.log('🛠️  PATH CONSTRUCTION:');
-      console.log('    - Final fullPath:', `"${fullPath}"`);
+    if (parentPath.trim()) {
+      const cleanParent = parentPath.replace(/^\/+|\/+$/g, '');
+      const cleanRequest = requestPath.replace(/^\/+|\/+$/g, '');
+      fullPath = cleanParent ? `${cleanParent}/${cleanRequest}` : cleanRequest;
     }
     
-    console.log('📁 CREATING:', `${requestType.toUpperCase()} at path: "${fullPath}"`);
+    console.log(`📁 [DEBUG] Full Path: "${fullPath}"`);
+    console.log(`📁 [DEBUG] User ID: "${userId}"`);
     
-    if (requestType === 'file' || requestType === 'directory') {
-      if (requestType === 'file') {
-        console.log('📄 Creating FILE...');
-        
-        // Clean content before creating file
-        let cleanContent = requestContent || '';
-        cleanContent = cleanContent.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-        cleanContent = cleanContent.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, '');
-        console.log('🧹 Cleaned content length:', cleanContent.length);
-        
-        await containerService.handleFileChange(userId, fullPath, cleanContent);
-        console.log('✅ File created successfully');
-      } else {
-        console.log('📂 Creating DIRECTORY...');
-        await containerService.dockerManager.createDirectory(userId, fullPath);
-        console.log('✅ Directory created successfully');
-      }
+    if (requestType === 'file') {
+      console.log(`📁 [DEBUG] Creating FILE: ${fullPath}`);
+      const cleanContent = ultraCleanContent(requestContent, fullPath);
+      await containerService.handleFileChange(userId, fullPath, cleanContent);
+      console.log('✅ [DEBUG] File created successfully');
+    } else if (requestType === 'directory') {
+      console.log(`📁 [DEBUG] Creating DIRECTORY: ${fullPath}`);
+      console.log(`📁 [DEBUG] 🚀 CALLING containerService.createDirectory("${userId}", "${fullPath}")`);
       
-      // Clean up duplicates
-      await containerService.dockerManager.cleanupDuplicateFiles(userId);
+      // THIS IS THE CRITICAL FIX - Call the updated createDirectory method
+      await containerService.createDirectory(userId, fullPath);
       
-      // FORCE REFRESH AFTER CREATION
-      const socketToEmit = userSocketMap.get(userId);
-      if (socketToEmit) {
-        const socket = io.sockets.sockets.get(socketToEmit);
-        if (socket) {
-          socket.emit('file:refresh');
-        }
-      }
-      
-      console.log('🎉 SUCCESS! Created:', `"${fullPath}"`);
-      res.json({ success: true, path: fullPath, type: requestType });
+      console.log('✅ [DEBUG] Directory created and stored in cloud successfully');
     } else {
-      console.error('❌ Invalid type:', requestType);
-      res.status(400).json({ error: 'Invalid type. Must be "file" or "directory"' });
+      console.error(`❌ [ERROR] Invalid type: ${requestType}`);
+      return res.status(400).json({ error: `Invalid type: ${requestType}` });
     }
+    
+    console.log(`📁 [DEBUG] Cleaning up duplicates...`);
+    await containerService.dockerManager.cleanupDuplicateFiles(userId);
+    
+    const socketToEmit = userSocketMap.get(userId);
+    if (socketToEmit) {
+      const socket = io.sockets.sockets.get(socketToEmit);
+      if (socket) {
+        socket.emit('file:refresh');
+        console.log(`📁 [DEBUG] File refresh emitted to socket`);
+      }
+    }
+    
+    console.log(`✅ [DEBUG] =================== CREATE ${requestType.toUpperCase()} SUCCESS ===================\n`);
+    res.json({ success: true, path: fullPath, type: requestType });
+    
   } catch (error: unknown) {
-    console.error('💥 ERROR in file creation:', error);
-    res.status(500).json({ error: (error as Error).message });
+    console.error(`\n❌ [ERROR] =================== CREATE FILE/DIRECTORY FAILED ===================`);
+    console.error('❌ [ERROR] Creation error:', error);
+    if (error instanceof Error) {
+      console.error('❌ [ERROR] Error message:', error.message);
+      console.error('❌ [ERROR] Error stack:', error.stack);
+    }
+    console.error(`❌ [ERROR] =================== CREATE FILE/DIRECTORY FAILED ===================\n`);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
-  
-  console.log('========================================');
 });
 
 app.post('/files/rename', async (req, res) => {
   console.log('=== POST /files/rename ===');
-  console.log('Request body:', req.body);
   
   try {
     const socketId: string = req.body.userId;
     const oldPath: string = req.body.oldPath;
     const newPath: string = req.body.newPath;
     
-    console.log('Renaming:', oldPath, '->', newPath);
-    
     const userId: string | undefined = socketUserMap.get(socketId);
     if (!userId) return res.status(400).json({ error: 'User session not found' });
     
     await containerService.dockerManager.renamePath(userId, oldPath, newPath);
-    console.log('✅ Rename successful');
     res.json({ success: true });
   } catch (error: unknown) {
     console.error('Error in rename:', error);
-    res.status(500).json({ error: (error as Error).message });
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
 
 app.delete('/files/delete', async (req, res) => {
   console.log('=== DELETE /files/delete ===');
-  console.log('Query params:', req.query);
   
   try {
     const socketId: string = req.query.userId as string;
     const path: string = req.query.path as string;
-    
-    console.log('Deleting path:', path);
+    const type: string = req.query.type as string; // Add type parameter
     
     const userId: string | undefined = socketUserMap.get(socketId);
     if (!userId) return res.status(400).json({ error: 'User session not found' });
     
-    await containerService.dockerManager.deletePath(userId, path);
-    console.log('✅ Delete successful');
+    if (type === 'directory') {
+      await containerService.deleteUserDirectory(userId, path);
+    } else {
+      await containerService.deleteUserFile(userId, path);
+    }
+    
     res.json({ success: true });
   } catch (error: unknown) {
     console.error('Error in delete:', error);
-    res.status(500).json({ error: (error as Error).message });
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
 
 app.get('/files/directory', async (req, res) => {
   console.log('=== GET /files/directory ===');
-  console.log('Query params:', req.query);
   
   try {
     const socketId: string = req.query.userId as string;
     const directoryPath: string = req.query.path as string;
     
-    console.log('Loading directory:', directoryPath);
-    
     const userId: string | undefined = socketUserMap.get(socketId);
     if (!userId) return res.status(400).json({ error: 'User session not found' });
     
     const items: string[] = await containerService.dockerManager.listDirectory(userId, directoryPath);
-    console.log('Directory items:', items);
     res.json({ items });
   } catch (error: unknown) {
     console.error('Error in directory listing:', error);
-    res.status(500).json({ error: (error as Error).message });
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
 

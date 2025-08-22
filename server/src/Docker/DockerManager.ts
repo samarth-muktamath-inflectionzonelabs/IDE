@@ -17,8 +17,102 @@ export class DockerManager {
     return this.userShells.get(userId);
   }
 
+  // COMPLETE FIX: Extension fixing with all programming languages
+  private fixIncompleteExtension(filePath: string): string {
+    console.log(`🔧 [DEBUG] Checking extension for: "${filePath}"`);
+    
+    const extensionMap: { [key: string]: string } = {
+      '.j': '.js',
+      '.t': '.ts', 
+      '.p': '.py',
+      '.c': '.cpp',
+      '.h': '.hpp',
+      '.ja': '.java',
+      '.ph': '.php',
+      '.r': '.rb',
+      '.g': '.go',
+      '.ru': '.rust',
+      '.sw': '.swift',
+      '.k': '.kt',
+      '.s': '.sh',
+      '.ht': '.html',
+      '.cs': '.css',
+      '.jso': '.json',
+      '.x': '.xml',
+      '.m': '.md',
+      '.y': '.yml',
+      '.do': '.dockerfile'
+    };
+
+    for (const [incomplete, complete] of Object.entries(extensionMap)) {
+      if (filePath.endsWith(incomplete) && !filePath.endsWith(complete)) {
+        const fixedPath = filePath.replace(incomplete, complete);
+        console.log(`🔧 [DEBUG] EXTENSION FIXED: "${filePath}" -> "${fixedPath}"`);
+        return fixedPath;
+      }
+    }
+
+    console.log(`🔧 [DEBUG] NO EXTENSION FIX NEEDED: "${filePath}"`);
+    return filePath;
+  }
+
+  // COMPLETE FIX: Ultra-aggressive content cleaning
+  private ultraCleanContent(content: string, filePath: string = ''): string {
+    console.log(`🧽 [DEBUG] Ultra-cleaning content for: ${filePath}`);
+    console.log(`🧽 [DEBUG] Original length: ${content.length}`);
+    
+    if (!content) return '';
+    
+    let cleaned = content;
+    
+    // Log original bytes for debugging
+    const originalBytes = Buffer.from(cleaned, 'utf8');
+    console.log(`🧽 [DEBUG] Original bytes (first 20): ${Array.from(originalBytes.slice(0, 20)).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(' ')}`);
+    
+    // Step 1: Keep ONLY safe ASCII characters + \n + \t
+    cleaned = cleaned.replace(/[^\x20-\x7E\x09\x0A]/g, '');
+    
+    // Step 2: Remove any remaining control characters
+    cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\xFF]/g, '');
+    
+    // Step 3: Normalize line endings
+    cleaned = cleaned.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    
+    // Step 4: Special handling for JSON files
+    if (filePath.includes('.json') || filePath.includes('package')) {
+      try {
+        console.log(`🧽 [DEBUG] JSON file detected, validating...`);
+        const parsed = JSON.parse(cleaned);
+        cleaned = JSON.stringify(parsed, null, 2);
+        console.log(`🧽 [DEBUG] JSON validated and reformatted`);
+      } catch (jsonError) {
+        console.log(`🧽 [DEBUG] JSON invalid, creating safe default`);
+        if (filePath.includes('package.json')) {
+          cleaned = JSON.stringify({
+            "name": "test",
+            "version": "1.0.0",
+            "main": "index.js",
+            "type": "module",
+            "scripts": {
+              "test": "echo \"Error: no test specified\" && exit 1"
+            },
+            "keywords": [],
+            "author": "",
+            "license": "ISC",
+            "description": ""
+          }, null, 2);
+        } else {
+          cleaned = '{}';
+        }
+      }
+    }
+    
+    console.log(`🧽 [DEBUG] Cleaning complete: ${content.length} -> ${cleaned.length}`);
+    return cleaned;
+  }
+
   async buildUserImage(): Promise<void> {
-    console.log('Building user environment image...');
+    console.log('🏗️ [DEBUG] Building user environment image...');
     await new Promise<void>((resolve, reject) => {
       this.docker.buildImage(
         {
@@ -30,18 +124,26 @@ export class DockerManager {
           dockerfile: 'Dockerfile.user'
         },
         (err, stream) => {
-          if (err) return reject(err);
+          if (err) {
+            console.error('❌ [ERROR] Build failed:', err);
+            return reject(err);
+          }
           stream?.on('data', (data: Buffer) => process.stdout.write(data.toString()));
-          stream?.on('end', () => resolve());
+          stream?.on('end', () => {
+            console.log('✅ [DEBUG] Build completed');
+            resolve();
+          });
           stream?.on('error', reject);
         }
       );
     });
-    console.log('User environment image built successfully');
   }
 
   async createUserContainer(userId: string): Promise<Docker.Container> {
+    console.log(`🐳 [DEBUG] Creating container for user: ${userId}`);
+    
     const hostPath: string = path.resolve(process.cwd(), 'user');
+    console.log(`🐳 [DEBUG] Host path: ${hostPath}`);
     
     try {
       await fs.stat(hostPath);
@@ -51,9 +153,8 @@ export class DockerManager {
     
     try {
       await fs.chmod(hostPath, 0o755);
-      console.log(`Set permissions for: ${hostPath}`);
     } catch (error) {
-      console.warn('Could not set permissions:', error);
+      console.warn('⚠️ [WARNING] Could not set permissions:', error);
     }
     
     const container: Docker.Container = await this.docker.createContainer({
@@ -69,6 +170,8 @@ export class DockerManager {
         'LC_ALL=C.UTF-8',
         'TERM=xterm-256color'
       ],
+       ExposedPorts: {
+    '3000/tcp': {} },
       HostConfig: {
         Memory: 536870912,
         CpuShares: 512,
@@ -79,6 +182,7 @@ export class DockerManager {
 
     await container.start();
     this.userContainers.set(userId, container);
+    console.log(`✅ [DEBUG] Container started: ${userId}`);
 
     try {
       const exec = await container.exec({
@@ -88,9 +192,8 @@ export class DockerManager {
         Tty: false
       });
       await exec.start({ hijack: true, stdin: false, Tty: false });
-      console.log('Fixed container permissions');
     } catch (error) {
-      console.warn('Could not fix container permissions:', error);
+      console.warn('⚠️ [WARNING] Permission fix failed:', error);
     }
 
     await this.createPersistentShell(userId);
@@ -98,6 +201,8 @@ export class DockerManager {
   }
 
   async createPersistentShell(userId: string): Promise<void> {
+    console.log(`🐚 [DEBUG] Creating shell for user: ${userId}`);
+    
     const container: Docker.Container | undefined = this.userContainers.get(userId);
     if (!container) return;
 
@@ -117,6 +222,7 @@ export class DockerManager {
       });
 
       this.userShells.set(userId, stream);
+      console.log(`✅ [DEBUG] Shell created: ${userId}`);
 
       setTimeout(() => {
         stream.write('\ncd /workspace\n');
@@ -125,7 +231,7 @@ export class DockerManager {
       }, 100);
 
     } catch (err) {
-      console.error(`Failed to create shell for user ${userId}:`, err);
+      console.error(`❌ [ERROR] Shell creation failed for ${userId}:`, err);
     }
   }
 
@@ -134,153 +240,126 @@ export class DockerManager {
   }
 
   async writeFileToContainer(userId: string, filePath: string, content: string): Promise<void> {
-    console.log(`🔧 [DEBUG] writeFileToContainer START - User: ${userId}, File: ${filePath}, Content length: ${content.length}`);
-    console.log(`🔍 [DEBUG] Raw content first 100 chars:`, JSON.stringify(content.substring(0, 100)));
+    console.log(`\n🔧 [DEBUG] =================== WRITE FILE START ===================`);
+    console.log(`🔧 [DEBUG] User: ${userId}`);
+    console.log(`🔧 [DEBUG] File: ${filePath}`);
+    console.log(`🔧 [DEBUG] Content Length: ${content.length}`);
     
     const container: Docker.Container | undefined = this.userContainers.get(userId);
     if (!container) {
-      console.error(`❌ [ERROR] writeFileToContainer - Container not found for user: ${userId}`);
-      return;
+      console.error(`❌ [ERROR] Container not found: ${userId}`);
+      throw new Error('Container not found');
     }
 
-    // STRONGEST FIX: Remove all control chars (including BOM and ALL Unicode controls) except \n and \t
-    let sanitizedContent = content;
-    
-    // Log original content bytes
-    const originalBytes = Buffer.from(content, 'utf8');
-    console.log(`🔍 [DEBUG] Original content bytes (first 20):`, Array.from(originalBytes.slice(0, 20)).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(' '));
-    
-    // Remove all ASCII and Unicode control characters and BOM, except \n (\x0A) and \t (\x09)
-    sanitizedContent = sanitizedContent.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\uFEFF]/g, '');
-    
-    // Normalize line endings to Unix format
-    sanitizedContent = sanitizedContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    
-    // Force re-encode as clean UTF-8
-    const cleanBuffer = Buffer.from(sanitizedContent, 'utf8');
-    sanitizedContent = cleanBuffer.toString('utf8');
-    
-    console.log(`📝 [DEBUG] Original length: ${content.length}, Sanitized length: ${sanitizedContent.length}`);
-    console.log(`🔍 [DEBUG] Sanitized content first 100 chars:`, JSON.stringify(sanitizedContent.substring(0, 100)));
-    console.log(`🔍 [DEBUG] Sanitized content bytes (first 20):`, Array.from(cleanBuffer.slice(0, 20)).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(' '));
-    
-    // SAFE TAR PACKING with explicit encoding
+    // Fix extension
+    const fixedPath = this.fixIncompleteExtension(filePath);
+    console.log(`🔧 [DEBUG] Fixed Path: ${fixedPath}`);
+
+    // Ultra-clean content
+    const cleanContent = this.ultraCleanContent(content, fixedPath);
+    console.log(`🔧 [DEBUG] Content cleaned: ${content.length} -> ${cleanContent.length}`);
+
+    // Create clean buffer
+    const contentBuffer = Buffer.from(cleanContent, 'utf8');
+    console.log(`🔧 [DEBUG] Buffer size: ${contentBuffer.length} bytes`);
+
+    // Create TAR with clean path
+    const cleanFilePath = fixedPath.startsWith('/') ? fixedPath.slice(1) : fixedPath;
     const pack = tar.pack();
-    
-    const cleanFilePath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
-    console.log(`📦 [DEBUG] writeFileToContainer - Clean file path: ${cleanFilePath}`);
-    
-    // Create the entry with explicit buffer and size
-    const contentBuffer = Buffer.from(sanitizedContent, 'utf8');
     
     pack.entry({ 
       name: cleanFilePath,
       size: contentBuffer.length,
-      mode: 0o644  // Explicit file permissions
+      mode: 0o644,
+      type: 'file'
     }, contentBuffer, (err) => {
       if (err) {
-        console.error(`❌ [ERROR] writeFileToContainer - Pack entry error for '${cleanFilePath}':`, err);
+        console.error(`❌ [ERROR] TAR entry failed:`, err);
         throw err;
       }
-      console.log(`✅ [DEBUG] writeFileToContainer - Entry packed successfully for file '${cleanFilePath}'`);
     });
     
     pack.finalize();
-    console.log(`📦 [DEBUG] writeFileToContainer - Pack finalized for file '${cleanFilePath}'`);
 
     try {
-      console.log(`🚀 [DEBUG] writeFileToContainer - Putting archive for user '${userId}', file '${cleanFilePath}'`);
+      console.log(`🚀 [DEBUG] Uploading to container...`);
       await container.putArchive(pack, { path: '/workspace' });
-      console.log(`✅ [DEBUG] writeFileToContainer - Archive put successfully`);
-    } catch (archiveError) {
-      console.error(`❌ [ERROR] writeFileToContainer - putArchive failed:`, archiveError);
-      throw archiveError;
+      console.log(`✅ [DEBUG] Upload successful`);
+      
+      // Sync filesystem
+      try {
+        const syncExec = await container.exec({
+          Cmd: ['sync'],
+          AttachStdout: false,
+          AttachStderr: false
+        });
+        await syncExec.start({ hijack: false });
+        console.log(`✅ [DEBUG] Sync completed`);
+      } catch (syncErr) {
+        console.warn('⚠️ [WARNING] Sync failed:', syncErr);
+      }
+      
+    } catch (archiveError: unknown) {
+      console.error(`❌ [ERROR] Upload failed:`, archiveError);
+      
+      if (archiveError instanceof Error) {
+        console.error(`❌ [ERROR] Details: ${archiveError.message}`);
+      }
+      
+      throw new Error(`File upload failed: ${archiveError instanceof Error ? archiveError.message : 'Unknown error'}`);
     }
     
-    // ENHANCED VERIFICATION - Check if file was written correctly
-    try {
-      console.log(`🔄 [DEBUG] writeFileToContainer - Starting verification`);
-      
-      // First sync
-      const syncExec = await container.exec({
-        Cmd: ['sync'],
-        AttachStdout: false,
-        AttachStderr: false,
-        Tty: false
-      });
-      await syncExec.start({ hijack: false });
-      console.log(`✅ [DEBUG] writeFileToContainer - Sync completed`);
-      
-      // Wait for file system
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Verify file content
-      const verifyExec = await container.exec({
-        Cmd: ['head', '-c', '50', `/workspace/${cleanFilePath}`],
-        AttachStdout: true,
-        AttachStderr: true,
-        Tty: false
-      });
-      
-      const verifyStream = await verifyExec.start({ hijack: true, stdin: false, Tty: false });
-      let verifyOutput = '';
-      
-      verifyStream.on('data', (chunk: Buffer) => {
-        verifyOutput += chunk.toString();
-      });
-      
-      await new Promise(resolve => verifyStream.on('end', resolve));
-      
-      console.log(`🔍 [DEBUG] writeFileToContainer - File verification output:`, JSON.stringify(verifyOutput.substring(0, 50)));
-      
-    } catch (err) {
-      console.warn(`⚠️ [WARNING] writeFileToContainer - Verification failed:`, err);
-    }
-    
-    console.log(`🎉 [DEBUG] writeFileToContainer COMPLETE - User: ${userId}, File: ${filePath}`);
+    console.log(`🔧 [DEBUG] =================== WRITE FILE SUCCESS ===================\n`);
   }
 
   async cleanupDuplicateFiles(userId: string): Promise<void> {
+    console.log(`🧹 [DEBUG] Cleaning duplicates for user: ${userId}`);
+    
     const container: Docker.Container | undefined = this.userContainers.get(userId);
     if (!container) return;
 
     try {
-      console.log(`🧹 [DEBUG] Starting cleanup of incomplete files for user: ${userId}`);
+      const incompleteExtensions = ['.j', '.t', '.p', '.c', '.h', '.ja', '.ph', '.r', '.g', '.ru', '.sw', '.k', '.s', '.ht', '.cs', '.jso', '.x', '.m', '.y', '.do'];
       
-      // Only remove files that are clearly incomplete (single letter extensions without common ones)
-      const exec = await container.exec({
-        Cmd: ['find', '/workspace', '-name', '*.j', '-type', 'f', '!', '-name', '*.js', '!', '-name', '*.json', '-delete'],
-        AttachStdout: true,
-        AttachStderr: true,
-        Tty: false
-      });
-      await exec.start({ hijack: true, stdin: false, Tty: false });
+      for (const ext of incompleteExtensions) {
+        try {
+          const exec = await container.exec({
+            Cmd: ['find', '/workspace', '-name', `*${ext}`, '-type', 'f', 
+                  '!', '-name', '*.js', '!', '-name', '*.ts', '!', '-name', '*.py', 
+                  '!', '-name', '*.cpp', '!', '-name', '*.hpp', '!', '-name', '*.java',
+                  '!', '-name', '*.php', '!', '-name', '*.rb', '!', '-name', '*.go',
+                  '!', '-name', '*.rust', '!', '-name', '*.swift', '!', '-name', '*.kt',
+                  '!', '-name', '*.sh', '!', '-name', '*.html', '!', '-name', '*.css',
+                  '!', '-name', '*.json', '!', '-name', '*.xml', '!', '-name', '*.md',
+                  '!', '-name', '*.yml', '!', '-name', '*.dockerfile', '-delete'],
+            AttachStdout: true,
+            AttachStderr: true,
+            Tty: false
+          });
+          await exec.start({ hijack: true, stdin: false, Tty: false });
+        } catch (err) {
+          console.warn(`⚠️ [WARNING] Could not cleanup ${ext}:`, err);
+        }
+      }
       
-      // Clean up other clearly incomplete extensions
-      const exec2 = await container.exec({
-        Cmd: ['find', '/workspace', '-name', '*.t', '-type', 'f', '!', '-name', '*.ts', '!', '-name', '*.txt', '-delete'],
-        AttachStdout: true,
-        AttachStderr: true,
-        Tty: false
-      });
-      await exec2.start({ hijack: true, stdin: false, Tty: false });
-      
-      console.log(`🧹 [DEBUG] Cleaned up incomplete files for user: ${userId}`);
+      console.log(`✅ [DEBUG] Cleanup completed: ${userId}`);
     } catch (err) {
-      console.warn('Could not cleanup incomplete files:', err);
+      console.error(`❌ [ERROR] Cleanup failed: ${userId}`, err);
     }
   }
 
   async readFileFromContainer(userId: string, filePath: string): Promise<string> {
+    console.log(`\n📖 [DEBUG] =================== READ FILE START ===================`);
+    console.log(`📖 [DEBUG] User: ${userId}, Path: ${filePath}`);
+    
     const container: Docker.Container | undefined = this.userContainers.get(userId);
     if (!container) throw new Error('Container not found');
 
-    console.log(`📖 [DEBUG] readFileFromContainer - User: ${userId}, Path: ${filePath}`);
-
-    let cleanPath: string = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+    const fixedPath = this.fixIncompleteExtension(filePath);
+    let cleanPath: string = fixedPath.startsWith('/') ? fixedPath.slice(1) : fixedPath;
     cleanPath = cleanPath.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
     
-    console.log(`📖 [DEBUG] readFileFromContainer - Clean path: ${cleanPath}`);
+    console.log(`📖 [DEBUG] Clean path: ${cleanPath}`);
     
     const exec = await container.exec({
       Cmd: ['cat', `/workspace/${cleanPath}`],
@@ -301,7 +380,6 @@ export class DockerManager {
     return new Promise((resolve, reject) => {
       stream.on('data', (chunk: Buffer) => {
         const data: string = chunk.toString();
-        console.log(`📖 [DEBUG] readFileFromContainer - Data chunk: ${data.substring(0, 100)}`);
         
         if (data.includes('No such file or directory') || data.includes('cannot access')) {
           error += data;
@@ -310,29 +388,25 @@ export class DockerManager {
         }
       });
       
-      stream.on('error', (err) => {
-        console.error(`❌ [ERROR] readFileFromContainer - Stream error:`, err);
-        reject(err);
-      });
+      stream.on('error', reject);
       
       stream.on('end', async () => {
         try {
           const inspect = await exec.inspect();
-          console.log(`📖 [DEBUG] readFileFromContainer - Exit code: ${inspect.ExitCode}`);
           
           if (inspect.ExitCode === 0 && !error) {
-            // Clean output but preserve formatting
-            let cleanedOutput: string = output;
-            cleanedOutput = cleanedOutput.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, ''); // Remove ANSI codes only
+            let cleanedOutput = output.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+            cleanedOutput = this.ultraCleanContent(cleanedOutput, filePath);
             
-            console.log(`📖 [DEBUG] readFileFromContainer - Success, content length: ${cleanedOutput.length}`);
+            console.log(`📖 [DEBUG] Read successful - Length: ${cleanedOutput.length}`);
+            console.log(`📖 [DEBUG] =================== READ FILE SUCCESS ===================\n`);
+            
             resolve(cleanedOutput);
           } else {
-            console.error(`❌ [ERROR] readFileFromContainer - File not found or error: ${error}`);
+            console.error(`❌ [ERROR] Read failed: ${error}`);
             reject(new Error(`File not found: ${cleanPath}`));
           }
         } catch (err) {
-          console.error(`❌ [ERROR] readFileFromContainer - Inspect error:`, err);
           reject(err);
         }
       });
@@ -340,16 +414,15 @@ export class DockerManager {
   }
 
   async executeCommand(userId: string, command: string): Promise<Readable | null> {
+    console.log(`⚡ [DEBUG] Command: ${userId} -> ${command}`);
     const shell = this.userShells.get(userId);
-    if (!shell) {
-      return null;
-    }
+    if (!shell) return null;
 
     try {
       shell.write(command + '\n');
       return shell as Readable;
     } catch (err: unknown) {
-      throw new Error(`Command execution failed: ${(err as Error).message}`);
+      throw new Error(`Command failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   }
 
@@ -361,6 +434,7 @@ export class DockerManager {
   }
 
   async listFiles(userId: string): Promise<string[]> {
+    console.log(`📁 [DEBUG] Listing files: ${userId}`);
     const container: Docker.Container | undefined = this.userContainers.get(userId);
     if (!container) return [];
 
@@ -402,12 +476,10 @@ export class DockerManager {
             const name: string = parts.slice(8).join(' ');
             
             if (name && !name.startsWith('.') && name !== '..' && name !== 'workspace') {
-              // FIXED: Only filter out files with single letter extensions that are clearly incomplete
-              // Keep valid files like .js, .ts, .py, .c, .go etc.
               if (name.includes('.')) {
                 const ext = name.split('.').pop();
-                if (ext && ext.length === 1 && !['c', 'r', 'go', 'h'].includes(ext)) {
-                  console.log(`🚫 [DEBUG] Filtering incomplete file: ${name}`);
+                const validSingleExtensions = ['c', 'r', 'go', 'h', 'm', 'd', 's', 'f', 'v', 'l', 'y'];
+                if (ext && ext.length === 1 && !validSingleExtensions.includes(ext)) {
                   continue;
                 }
               }
@@ -415,7 +487,7 @@ export class DockerManager {
             }
           }
           
-          console.log(`📁 [DEBUG] listFiles result for user ${userId}:`, result);
+          console.log(`📁 [DEBUG] Files found: ${result.length}`);
           resolve(result);
         } catch (err) {
           reject(err);
@@ -426,14 +498,10 @@ export class DockerManager {
 
   async listDirectory(userId: string, directoryPath: string): Promise<string[]> {
     const container: Docker.Container | undefined = this.userContainers.get(userId);
-    if (!container) {
-      return [];
-    }
+    if (!container) return [];
 
     let cleanPath: string = directoryPath || '';
-    cleanPath = cleanPath.replace(/^\/+/, '');
-    cleanPath = cleanPath.replace(/\/+$/, '');
-    
+    cleanPath = cleanPath.replace(/^\/+/, '').replace(/\/+$/, '');
     const fullPath: string = cleanPath ? `/workspace/${cleanPath}` : '/workspace';
 
     const exec = await container.exec({
@@ -456,10 +524,7 @@ export class DockerManager {
         output += chunk.toString();
       });
       
-      stream.on('error', (err: Error) => {
-        console.error('Stream error in listDirectory:', err);
-        reject(err);
-      });
+      stream.on('error', reject);
       
       stream.on('end', async () => {
         try {
@@ -485,11 +550,10 @@ export class DockerManager {
             const name: string = parts.slice(8).join(' ');
             
             if (name && !name.startsWith('.') && name !== '..') {
-              // FIXED: Same filtering logic as listFiles
               if (name.includes('.')) {
                 const ext = name.split('.').pop();
-                if (ext && ext.length === 1 && !['c', 'r', 'go', 'h'].includes(ext)) {
-                  console.log(`🚫 [DEBUG] Filtering incomplete file: ${name}`);
+                const validSingleExtensions = ['c', 'r', 'go', 'h', 'm', 'd', 's', 'f', 'v', 'l', 'y'];
+                if (ext && ext.length === 1 && !validSingleExtensions.includes(ext)) {
                   continue;
                 }
               }
@@ -497,10 +561,8 @@ export class DockerManager {
             }
           }
           
-          console.log(`📁 [DEBUG] listDirectory result for ${directoryPath}:`, result);
           resolve(result);
         } catch (err) {
-          console.error('Error parsing directory listing:', err);
           reject(err);
         }
       });
@@ -508,10 +570,9 @@ export class DockerManager {
   }
 
   async createDirectory(userId: string, path: string): Promise<void> {
+    console.log(`📁 [DEBUG] Creating directory: ${userId} -> ${path}`);
     const container: Docker.Container | undefined = this.userContainers.get(userId);
-    if (!container) {
-      throw new Error('Container not found');
-    }
+    if (!container) throw new Error('Container not found');
 
     const exec = await container.exec({
       Cmd: ['mkdir', '-p', `/workspace/${path}`],
@@ -548,7 +609,7 @@ export class DockerManager {
               });
               await chmodExec.start({ hijack: true, stdin: false, Tty: false });
             } catch (chmodError) {
-              console.warn('Could not fix directory permissions:', chmodError);
+              console.warn('Permission fix failed:', chmodError);
             }
             resolve();
           } else {
@@ -565,9 +626,7 @@ export class DockerManager {
 
   async renamePath(userId: string, oldPath: string, newPath: string): Promise<void> {
     const container: Docker.Container | undefined = this.userContainers.get(userId);
-    if (!container) {
-      throw new Error('Container not found');
-    }
+    if (!container) throw new Error('Container not found');
 
     const exec = await container.exec({
       Cmd: ['mv', `/workspace/${oldPath}`, `/workspace/${newPath}`],
@@ -628,6 +687,7 @@ export class DockerManager {
   }
 
   async cleanupContainer(userId: string): Promise<void> {
+    console.log(`🧹 [DEBUG] Cleaning up container: ${userId}`);
     const container: Docker.Container | undefined = this.userContainers.get(userId);
     const shell = this.userShells.get(userId);
 
@@ -635,7 +695,7 @@ export class DockerManager {
       try {
         shell.end();
       } catch (err) {
-        // Silently handle errors
+        // Ignore errors
       }
       this.userShells.delete(userId);
     }
@@ -646,9 +706,10 @@ export class DockerManager {
       await container.stop();
       await container.remove();
       this.userContainers.delete(userId);
-    } catch (err: any) {
-      if (err.statusCode !== 409) {
-        console.error('Error cleaning up container:', err);
+    } catch (err: unknown) {
+      const statusCode = (err as any)?.statusCode;
+      if (statusCode !== 409) {
+        console.error(`Cleanup error for ${userId}:`, err);
       }
       this.userContainers.delete(userId);
     }
