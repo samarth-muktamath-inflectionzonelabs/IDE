@@ -15,7 +15,14 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "moduleResolution": "node"
+    "moduleResolution": "node",
+    
+    // REQUIRED FOR TYPEORM DECORATORS
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    
+    // PREVENTS PROPERTY INITIALIZATION ERRORS
+    "strictPropertyInitialization": false
   },
   "include": ["**/*.ts"],
   "exclude": ["node_modules"]

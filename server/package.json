@@ -16,13 +16,24 @@
   "type": "module",
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/pg": "^8.15.5",
+    "@types/uuid": "^10.0.0",
+    "bcryptjs": "^3.0.2",
     "chokidar": "^4.0.3",
     "cors": "^2.8.5",
     "dockerode": "^4.0.7",
+    "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
     "minio": "^8.0.5",
+    "pg": "^8.16.3",
+    "reflect-metadata": "^0.2.2",
     "socket.io": "^4.8.1",
-    "tar-stream": "^3.1.7"
+    "tar-stream": "^3.1.7",
+    "typeorm": "^0.3.26",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

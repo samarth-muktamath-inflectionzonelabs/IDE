@@ -1,3 +1,4 @@
+import 'reflect-metadata'; // MUST BE FIRST IMPORT
 import * as http from 'http';
 import express from 'express';
 import { promises as fs } from 'fs';
@@ -6,10 +7,27 @@ import * as path from 'path';
 import cors from 'cors';
 import chokidar from 'chokidar';
 import { ContainerService } from './src/services/ContainerService.js';
+import { AuthService } from './src/services/AuthService.js';
+import { ProjectService } from './src/services/ProjectService.js';
+import { AppDataSource } from './src/database/data-source.js';
 import { randomBytes } from 'crypto';
 import Docker from 'dockerode';
 
+// Initialize database connection FIRST
+console.log('🚀 [Server] Initializing database connection...');
+AppDataSource.initialize()
+  .then(() => {
+    console.log('✅ [Database] Connected successfully');
+  })
+  .catch((error) => {
+    console.error('❌ [Database] Connection failed:', error);
+    process.exit(1);
+  });
+
+// Initialize services
 const containerService = new ContainerService();
+const authService = new AuthService();
+const projectService = new ProjectService();
 
 const app = express();
 const server = http.createServer(app);
@@ -128,6 +146,114 @@ function fixIncompleteExtension(filePath: string): string {
   console.log(`🔧 [DEBUG] NO EXTENSION FIX NEEDED: "${filePath}"`);
   return filePath;
 }
+
+// ========================================
+// NEW: AUTHENTICATION ROUTES
+// ========================================
+
+app.get('/api/test', (req, res) => {
+  res.json({ 
+    message: 'Server is working!', 
+    timestamp: new Date().toISOString(),
+    endpoints: [
+      'GET /api/test',
+      'POST /api/auth/register',
+      'POST /api/auth/login',
+      'GET /api/projects',
+      'POST /api/projects',
+      'GET /health'
+    ]
+  });
+});
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    console.log('📝 [Auth] Registration attempt:', req.body);
+    const { username, email, password } = req.body;
+    
+    if (!username || !email || !password) {
+      console.log('❌ [Auth] Missing required fields');
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+    
+    const result = await authService.register(username, email, password);
+    console.log(`✅ [Auth] User registered successfully: ${username}`);
+    res.json(result);
+  } catch (error) {
+    console.error('❌ [Auth] Registration failed:', error);
+    res.status(400).json({ 
+      error: error instanceof Error ? error.message : 'Registration failed' 
+    });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    console.log('🔑 [Auth] Login attempt:', { usernameOrEmail: req.body.usernameOrEmail });
+    const { usernameOrEmail, password } = req.body;
+    
+    if (!usernameOrEmail || !password) {
+      console.log('❌ [Auth] Missing login credentials');
+      return res.status(400).json({ error: 'Username/email and password are required' });
+    }
+    
+    const result = await authService.login(usernameOrEmail, password);
+    console.log(`✅ [Auth] User logged in successfully: ${result.user.username}`);
+    res.json(result);
+  } catch (error) {
+    console.error('❌ [Auth] Login failed:', error);
+    res.status(400).json({ 
+      error: error instanceof Error ? error.message : 'Login failed' 
+    });
+  }
+});
+
+// PROJECT ROUTES
+app.get('/api/projects', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
+
+    const decoded = authService.verifyToken(token);
+    const result = await projectService.getUserProjects(decoded.userId);
+    console.log(`📋 [Projects] Retrieved ${result.projects.length} projects for user ${decoded.userId}`);
+    res.json(result);
+  } catch (error) {
+    console.error('❌ [Projects] Failed to fetch projects:', error);
+    res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
+app.post('/api/projects', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return res.status(401).json({ error: 'No token provided' });
+    }
+
+    const decoded = authService.verifyToken(token);
+    const { name, description } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Project name is required' });
+    }
+    
+    const project = await projectService.createProject(decoded.userId, name, description);
+    console.log(`✅ [Projects] Project created: ${name} for user ${decoded.userId}`);
+    res.json(project);
+  } catch (error) {
+    console.error('❌ [Projects] Project creation failed:', error);
+    res.status(400).json({ 
+      error: error instanceof Error ? error.message : 'Project creation failed' 
+    });
+  }
+});
+
+// ========================================
+// ALL YOUR EXISTING SOCKET.IO CODE - UNCHANGED
+// ========================================
 
 io.on('connection', (socket) => {
   const userId: string = generateCleanUserId();
@@ -269,6 +395,10 @@ io.on('connection', (socket) => {
   });
 });
 
+// ========================================
+// ALL YOUR EXISTING API ROUTES - UNCHANGED
+// ========================================
+
 // Updated tree function with type safety
 function toTree(items: string[]): Record<string, any> {
   const tree: Record<string, any> = {};
@@ -297,14 +427,20 @@ function toTree(items: string[]): Record<string, any> {
   return tree;
 }
 
-// Add health check route
+// Add health check route with database status
 app.get('/health', async (req, res) => {
   try {
     const health = await containerService.getHealthStatus();
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
-      services: health
+      services: {
+        ...health,
+        database: {
+          status: AppDataSource.isInitialized ? 'healthy' : 'unhealthy',
+          connected: AppDataSource.isInitialized
+        }
+      }
     });
   } catch (error) {
     res.status(500).json({
@@ -559,7 +695,17 @@ async function cleanupOldContainers(): Promise<void> {
 
 containerService.initialize().then(async () => {
   await cleanupOldContainers();
-  server.listen(9000, () => console.log('🐳 Docker-enabled Replit clone running on port 9000'));
+  server.listen(9000, () => {
+    console.log('🐳 Docker-enabled Replit clone with database running on port 9000');
+    console.log('✅ [Server] Authentication enabled (optional)');
+    console.log('✅ [Server] Persistent user sessions active');
+    console.log('✅ [Server] Database integration complete');
+    console.log('🔌 [Socket.IO] Available at ws://localhost:9000/socket.io/');
+    console.log('📊 [Health] Check at http://localhost:9000/health');
+    console.log('🧪 [Test] API test at http://localhost:9000/api/test');
+    console.log('📝 [Auth] Register at POST http://localhost:9000/api/auth/register');
+    console.log('🔑 [Auth] Login at POST http://localhost:9000/api/auth/login');
+  });
 }).catch((error) => {
   console.error('Failed to initialize container service:', error);
   process.exit(1);

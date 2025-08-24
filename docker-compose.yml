@@ -1,30 +1,65 @@
 version: '3.8'
 
 services:
+  # Main Application (Backend + Frontend)
   app:
     build: .
     ports:
-      - "9000:9000"
-      - "5173:5173"
+      - "9000:9000"    # Backend API and Socket.IO
+      - "5173:5173"    # Frontend dev server (if needed)
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./server/user-data:/app/user-data
+      - ./server/user:/app/user  # Fixed: Changed from user-data to user
     environment:
       - NODE_ENV=production
+      # Database Configuration
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=yourpassword
+      - DB_NAME=playground_db
+      - JWT_SECRET=your-super-secret-jwt-key
+      # MinIO Configuration (FIXED: Correct endpoint and port)
       - MINIO_ENDPOINT=minio
-      - MINIO_PORT=9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
     depends_on:
+      - postgres    # Added database dependency
       - redis
       - minio
-    
+    networks:
+      - playground_network
+
+  # PostgreSQL Database (ADDED - Required for user accounts)
+  postgres:
+    image: postgres:15
+    container_name: postgres_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=playground_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=yourpassword
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - playground_network
+
+  # Redis Cache
   redis:
     image: redis:alpine
+    container_name: redis_cache
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - playground_network
 
   # MinIO Cloud Storage Service
   minio:
@@ -32,7 +67,7 @@ services:
     container_name: minio_storage
     command: server /data --console-address ":9002"
     ports:
-      - "9001:9000"  # MinIO API
+      - "9001:9000"  # MinIO API (FIXED: No conflict with app)
       - "9002:9002"  # MinIO Console (Web UI)
     volumes:
       - minio_data:/data
@@ -44,37 +79,54 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    networks:
+      - playground_network
 
-  # Auto-create bucket service
+  # Auto-create MinIO bucket
   createbucket:
     image: minio/mc:latest
+    container_name: minio_setup
     depends_on:
       - minio
     restart: on-failure
+    networks:
+      - playground_network
     entrypoint: >
       /bin/sh -c "
-      sleep 10;
+      echo 'Waiting for MinIO to be ready...';
+      sleep 15;
       /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin123;
       /usr/bin/mc mb myminio/user-files --ignore-existing;
       /usr/bin/mc policy set public myminio/user-files;
-      echo 'Bucket user-files created successfully';
+      echo 'MinIO bucket user-files created successfully';
       exit 0;
       "
 
+  # Frontend Development Server (Optional - for dev profile)
   frontend-dev:
     build:
       context: ./interface
       dockerfile: Dockerfile.dev
     ports:
-      - "5173:5173"
+      - "5174:5173"  # Different port to avoid conflict
     volumes:
       - ./interface:/app
       - /app/node_modules
     environment:
       - NODE_ENV=development
+      - VITE_API_URL=http://localhost:9000  # Point to backend
+    networks:
+      - playground_network
     profiles:
       - dev
 
+# Network Configuration (ADDED for proper service communication)
+networks:
+  playground_network:
+    driver: bridge
+
+# Volume Configuration
 volumes:
+  postgres_data:    # Added for database persistence
   redis_data:
   minio_data:
